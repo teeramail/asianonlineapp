@@ -27,6 +27,7 @@ import {
   ExternalLink,
   FileArchive,
   FileAudio,
+  Link,
 } from "lucide-react";
 import { api } from "~/trpc/react";
 import { format } from "date-fns";
@@ -826,24 +827,46 @@ function StudyCard({
       const failedFiles: string[] = [];
 
       for (const file of uploadableFiles) {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("subfolder", editAttachmentSubfolder);
-
         try {
-          const res = await fetch("/api/upload-attachment", {
+          const presignRes = await fetch("/api/presign-attachment", {
             method: "POST",
-            body: formData,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: file.name,
+              contentType: file.type || "application/octet-stream",
+              fileSize: file.size,
+              subfolder: editAttachmentSubfolder,
+            }),
           });
 
-          if (!res.ok) {
-            const errorData = (await res.json().catch(() => null)) as { error?: string } | null;
+          if (!presignRes.ok) {
+            const errorData = (await presignRes.json().catch(() => null)) as { error?: string } | null;
             failedFiles.push(errorData?.error ? `${file.name} (${errorData.error})` : file.name);
             continue;
           }
 
-          const data = (await res.json()) as Attachment;
-          uploadedAttachments.push(data);
+          const presignData = (await presignRes.json()) as Attachment & { uploadUrl: string };
+
+          const uploadRes = await fetch(presignData.uploadUrl, {
+            method: "PUT",
+            body: file,
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+          });
+
+          if (!uploadRes.ok) {
+            failedFiles.push(`${file.name} (upload to storage failed)`);
+            continue;
+          }
+
+          uploadedAttachments.push({
+            fileName: presignData.fileName,
+            originalName: presignData.originalName,
+            mimeType: presignData.mimeType,
+            fileSize: presignData.fileSize,
+            s3Key: presignData.s3Key,
+            url: presignData.url,
+            subfolder: presignData.subfolder,
+          });
         } catch {
           failedFiles.push(file.name);
         }
@@ -1066,7 +1089,7 @@ function StudyCard({
               ) : (
                 <>
                   <Paperclip className="h-4 w-4" />
-                  Add more attachments
+                  Upload files (max {MAX_ATTACHMENT_SIZE_LABEL} each)
                 </>
               )}
               <input
@@ -1077,6 +1100,51 @@ function StudyCard({
                 disabled={editAttachmentUploading}
               />
             </label>
+            <div className="mt-2">
+              <p className="mb-1 text-xs text-gray-400">File too large? Paste a link instead:</p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const linkUrl = (form.elements.namedItem("linkUrl") as HTMLInputElement).value.trim();
+                  const linkName = (form.elements.namedItem("linkName") as HTMLInputElement).value.trim() || linkUrl;
+                  if (!linkUrl) return;
+                  setEditedAttachments((prev) => [
+                    ...prev,
+                    {
+                      fileName: linkName,
+                      originalName: linkName,
+                      mimeType: "text/x-url",
+                      fileSize: 0,
+                      s3Key: `link_${Date.now()}`,
+                      url: linkUrl,
+                    },
+                  ]);
+                  form.reset();
+                }}
+                className="flex items-center gap-2"
+              >
+                <Link className="h-4 w-4 shrink-0 text-gray-400" />
+                <input
+                  name="linkUrl"
+                  type="url"
+                  placeholder="https://drive.google.com/..."
+                  className="flex-1 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+                />
+                <input
+                  name="linkName"
+                  type="text"
+                  placeholder="Name (optional)"
+                  className="w-32 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+                >
+                  Add
+                </button>
+              </form>
+            </div>
           </div>
           <input
             value={estimatedCost}
@@ -1498,8 +1566,8 @@ interface CardImageMeta {
 }
 
 const MAX_CARD_IMAGES = 10;
-const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
-const MAX_ATTACHMENT_SIZE_LABEL = "10 MB";
+const MAX_ATTACHMENT_SIZE_BYTES = 12 * 1024 * 1024;
+const MAX_ATTACHMENT_SIZE_LABEL = "12 MB";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1511,6 +1579,7 @@ function getAttachmentIcon(mimeType: string) {
   if (!mimeType) return FileText;
   
   const type = mimeType.toLowerCase();
+  if (type === "text/x-url") return ExternalLink;
   if (type.startsWith("image/")) return ImageIcon;
   if (type.startsWith("video/")) return FileVideo;
   if (type.startsWith("audio/")) return FileAudio;
@@ -1709,24 +1778,46 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
       const failedFiles: string[] = [];
 
       for (const file of uploadableFiles) {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("subfolder", attachmentSubfolder);
-
         try {
-          const res = await fetch("/api/upload-attachment", {
+          const presignRes = await fetch("/api/presign-attachment", {
             method: "POST",
-            body: formData,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: file.name,
+              contentType: file.type || "application/octet-stream",
+              fileSize: file.size,
+              subfolder: attachmentSubfolder,
+            }),
           });
 
-          if (!res.ok) {
-            const errorData = (await res.json().catch(() => null)) as { error?: string } | null;
+          if (!presignRes.ok) {
+            const errorData = (await presignRes.json().catch(() => null)) as { error?: string } | null;
             failedFiles.push(errorData?.error ? `${file.name} (${errorData.error})` : file.name);
             continue;
           }
 
-          const data = (await res.json()) as Attachment;
-          uploadedAttachments.push(data);
+          const presignData = (await presignRes.json()) as Attachment & { uploadUrl: string };
+
+          const uploadRes = await fetch(presignData.uploadUrl, {
+            method: "PUT",
+            body: file,
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+          });
+
+          if (!uploadRes.ok) {
+            failedFiles.push(`${file.name} (upload to storage failed)`);
+            continue;
+          }
+
+          uploadedAttachments.push({
+            fileName: presignData.fileName,
+            originalName: presignData.originalName,
+            mimeType: presignData.mimeType,
+            fileSize: presignData.fileSize,
+            s3Key: presignData.s3Key,
+            url: presignData.url,
+            subfolder: presignData.subfolder,
+          });
         } catch {
           failedFiles.push(file.name);
         }
@@ -2021,7 +2112,7 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
               ) : (
                 <>
                   <Paperclip className="h-5 w-5" />
-                  Click to attach files
+                  Upload files (max {MAX_ATTACHMENT_SIZE_LABEL} each)
                 </>
               )}
               <input
@@ -2032,6 +2123,51 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
                 disabled={attachmentUploading}
               />
             </label>
+            <div className="mt-2">
+              <p className="mb-1 text-xs text-gray-400">File too large? Paste a link instead:</p>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const linkUrl = (form.elements.namedItem("linkUrl") as HTMLInputElement).value.trim();
+                  const linkName = (form.elements.namedItem("linkName") as HTMLInputElement).value.trim() || linkUrl;
+                  if (!linkUrl) return;
+                  setAttachments((prev) => [
+                    ...prev,
+                    {
+                      fileName: linkName,
+                      originalName: linkName,
+                      mimeType: "text/x-url",
+                      fileSize: 0,
+                      s3Key: `link_${Date.now()}`,
+                      url: linkUrl,
+                    },
+                  ]);
+                  form.reset();
+                }}
+                className="flex items-center gap-2"
+              >
+                <Link className="h-4 w-4 shrink-0 text-gray-400" />
+                <input
+                  name="linkUrl"
+                  type="url"
+                  placeholder="https://drive.google.com/..."
+                  className="flex-1 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+                />
+                <input
+                  name="linkName"
+                  type="text"
+                  placeholder="Name (optional)"
+                  className="w-32 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="rounded bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+                >
+                  Add
+                </button>
+              </form>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">

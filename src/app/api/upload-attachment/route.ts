@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { s3Client, BUCKET, getS3Key, getPublicUrl } from "~/server/s3";
 
-const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_SIZE_BYTES = 12 * 1024 * 1024;
 
 // Next.js App Router body size limit config
 export const maxDuration = 60; // Allow more time for large uploads
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
 
     if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
       return NextResponse.json(
-        { error: "File too large. Max allowed size is 10 MB." },
+        { error: "File too large. Max allowed size is 12 MB." },
         { status: 400 }
       );
     }
