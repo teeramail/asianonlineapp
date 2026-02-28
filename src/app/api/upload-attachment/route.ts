@@ -2,6 +2,8 @@ import { type NextRequest, NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { s3Client, BUCKET, getS3Key, getPublicUrl } from "~/server/s3";
 
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
@@ -10,6 +12,13 @@ export async function POST(req: NextRequest) {
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+
+    if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+      return NextResponse.json(
+        { error: "File too large. Max allowed size is 10 MB." },
+        { status: 400 }
+      );
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -23,7 +32,7 @@ export async function POST(req: NextRequest) {
       Bucket: BUCKET,
       Key: s3Key,
       Body: buffer,
-      ContentType: file.type,
+      ContentType: file.type || "application/octet-stream",
       ACL: "public-read",
     });
 

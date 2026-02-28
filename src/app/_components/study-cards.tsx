@@ -800,13 +800,30 @@ function StudyCard({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const selectedFiles = Array.from(files);
+    const oversizedFiles = selectedFiles.filter((file) => file.size > MAX_ATTACHMENT_SIZE_BYTES);
+    const uploadableFiles = selectedFiles.filter((file) => file.size <= MAX_ATTACHMENT_SIZE_BYTES);
+
+    if (oversizedFiles.length > 0) {
+      alert(
+        `These files are larger than ${MAX_ATTACHMENT_SIZE_LABEL} and were skipped: ${oversizedFiles
+          .map((file) => file.name)
+          .join(", ")}`
+      );
+    }
+
+    if (uploadableFiles.length === 0) {
+      e.target.value = "";
+      return;
+    }
+
     setEditAttachmentUploading(true);
 
     try {
       const uploadedAttachments: Attachment[] = [];
       const failedFiles: string[] = [];
 
-      for (const file of Array.from(files)) {
+      for (const file of uploadableFiles) {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("subfolder", editAttachmentSubfolder);
@@ -818,7 +835,8 @@ function StudyCard({
           });
 
           if (!res.ok) {
-            failedFiles.push(file.name);
+            const errorData = (await res.json().catch(() => null)) as { error?: string } | null;
+            failedFiles.push(errorData?.error ? `${file.name} (${errorData.error})` : file.name);
             continue;
           }
 
@@ -994,7 +1012,7 @@ function StudyCard({
             <label className="mb-1 block text-sm font-medium text-gray-700">
               Attachments
               <span className="ml-1 text-xs font-normal text-gray-400">
-                (PDF, Word, images, videos)
+                (any file type, max {MAX_ATTACHMENT_SIZE_LABEL} each)
               </span>
             </label>
             <div className="mb-2 flex items-center gap-2">
@@ -1478,6 +1496,8 @@ interface CardImageMeta {
 }
 
 const MAX_CARD_IMAGES = 10;
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_SIZE_LABEL = "10 MB";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1649,13 +1669,30 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const selectedFiles = Array.from(files);
+    const oversizedFiles = selectedFiles.filter((file) => file.size > MAX_ATTACHMENT_SIZE_BYTES);
+    const uploadableFiles = selectedFiles.filter((file) => file.size <= MAX_ATTACHMENT_SIZE_BYTES);
+
+    if (oversizedFiles.length > 0) {
+      alert(
+        `These files are larger than ${MAX_ATTACHMENT_SIZE_LABEL} and were skipped: ${oversizedFiles
+          .map((file) => file.name)
+          .join(", ")}`
+      );
+    }
+
+    if (uploadableFiles.length === 0) {
+      e.target.value = "";
+      return;
+    }
+
     setAttachmentUploading(true);
 
     try {
       const uploadedAttachments: Attachment[] = [];
       const failedFiles: string[] = [];
 
-      for (const file of Array.from(files)) {
+      for (const file of uploadableFiles) {
         const formData = new FormData();
         formData.append("file", file);
         formData.append("subfolder", attachmentSubfolder);
@@ -1667,7 +1704,8 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
           });
 
           if (!res.ok) {
-            failedFiles.push(file.name);
+            const errorData = (await res.json().catch(() => null)) as { error?: string } | null;
+            failedFiles.push(errorData?.error ? `${file.name} (${errorData.error})` : file.name);
             continue;
           }
 
@@ -1912,7 +1950,9 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Attachments
-              <span className="ml-1 text-xs font-normal text-gray-400">(PDF, Word, images, videos — original quality)</span>
+              <span className="ml-1 text-xs font-normal text-gray-400">
+                (any file type, max {MAX_ATTACHMENT_SIZE_LABEL} each)
+              </span>
             </label>
             
             {/* Attachment Subfolder Input */}
