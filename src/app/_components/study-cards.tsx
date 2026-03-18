@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Image from "next/image";
 import {
   Plus,
@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { api } from "~/trpc/react";
 import { format } from "date-fns";
+import { CardDiscussion } from "~/app/_components/card-discussion";
 
 const SUBJECT_TAG_SUGGESTIONS = [
   "physics",
@@ -485,8 +486,10 @@ interface StudyCardDetailModalProps {
 }
 
 function StudyCardDetailModal({ card, onClose }: StudyCardDetailModalProps) {
-  const parsedAttachments: Attachment[] = card.attachments ? JSON.parse(card.attachments) : [];
-  const cardImages: CardImageMeta[] = parsedAttachments
+  const allParsed: Attachment[] = card.attachments ? (JSON.parse(card.attachments) as Attachment[]) : [];
+  const cardImgAttachments = useRef<Attachment[]>(allParsed.filter((a) => a.kind === "card-image"));
+
+  const cardImages: CardImageMeta[] = allParsed
     .filter((att) => att.kind === "card-image")
     .map((att) => ({
       s3Key: att.s3Key,
@@ -507,7 +510,112 @@ function StudyCardDetailModal({ card, onClose }: StudyCardDetailModalProps) {
   }
 
   const embedUrl = card.youtubeUrl ? getYoutubeEmbedUrl(card.youtubeUrl) : null;
-  const visibleAttachments = parsedAttachments.filter((att) => att.kind !== "card-image");
+
+  const [localAttachments, setLocalAttachments] = useState<Attachment[]>(
+    allParsed.filter((a) => a.kind !== "card-image"),
+  );
+  const [attLinkUrl, setAttLinkUrl] = useState("");
+  const [attLinkName, setAttLinkName] = useState("");
+  const [attUploading, setAttUploading] = useState(false);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
+
+  const utils = api.useUtils();
+  const updateCard = api.studyCards.update.useMutation({
+    onSuccess: () => { void utils.studyCards.getAll.invalidate(); },
+  });
+  const deleteAttFile = api.studyCards.deleteAttachmentFile.useMutation();
+
+  const persistAttachments = (next: Attachment[]) => {
+    const all = [...cardImgAttachments.current, ...next];
+    void updateCard.mutateAsync({ id: card.id as number, attachments: JSON.stringify(all) });
+  };
+
+  const handleAttachmentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    setAttUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        const res = await fetch("/api/presign-attachment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            contentType: file.type || "application/octet-stream",
+            fileSize: file.size,
+            subfolder: "study-cards/attachments",
+          }),
+        });
+        if (!res.ok) continue;
+        const data = (await res.json()) as {
+          uploadUrl: string; s3Key: string; url: string;
+          fileName: string; originalName: string; mimeType: string;
+          fileSize: number; subfolder: string;
+        };
+        await fetch(data.uploadUrl, {
+          method: "PUT", body: file,
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+        });
+        const newAtt: Attachment = {
+          fileName: data.fileName, originalName: data.originalName,
+          mimeType: data.mimeType, fileSize: data.fileSize,
+          s3Key: data.s3Key, url: data.url, subfolder: data.subfolder,
+          kind: "attachment",
+        };
+        setLocalAttachments((prev) => {
+          const next = [...prev, newAtt];
+          persistAttachments(next);
+          return next;
+        });
+      }
+    } finally {
+      setAttUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleAddAttachmentLink = () => {
+    const url = attLinkUrl.trim();
+    const name = attLinkName.trim() || url;
+    if (!url) return;
+    const newAtt: Attachment = {
+      fileName: name, originalName: name,
+      mimeType: "text/x-url", fileSize: 0,
+      s3Key: `link_${Date.now()}`, url, kind: "attachment",
+    };
+    setLocalAttachments((prev) => {
+      const next = [...prev, newAtt];
+      persistAttachments(next);
+      return next;
+    });
+    setAttLinkUrl("");
+    setAttLinkName("");
+  };
+
+  const handleDeleteAttachment = (idx: number) => {
+    const att = localAttachments[idx]!;
+    if (att.mimeType !== "text/x-url" && !att.s3Key.startsWith("link_")) {
+      void deleteAttFile.mutateAsync({ s3Key: att.s3Key });
+    }
+    setLocalAttachments((prev) => {
+      const next = prev.filter((_, i) => i !== idx);
+      persistAttachments(next);
+      return next;
+    });
+  };
+
+  const handleRenameAttachment = (idx: number) => {
+    const name = editingName.trim();
+    if (!name) { setEditingIdx(null); return; }
+    setLocalAttachments((prev) => {
+      const next = prev.map((a, i) => i === idx ? { ...a, originalName: name } : a);
+      persistAttachments(next);
+      return next;
+    });
+    setEditingIdx(null);
+    setEditingName("");
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" onClick={onClose}>
@@ -602,30 +710,138 @@ function StudyCardDetailModal({ card, onClose }: StudyCardDetailModalProps) {
           </div>
         )}
 
-        {visibleAttachments.length > 0 && (
-          <div className="mt-5 rounded-lg border border-gray-200 p-3">
-            <p className="mb-2 text-sm font-medium text-gray-700">Attachments</p>
-            <div className="space-y-2">
-              {visibleAttachments.map((att) => {
+        {/* ── Main Card Attachments ── */}
+        <div className="mt-5 rounded-xl border border-gray-200 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-700">
+              Attachments
+              <span className="ml-1.5 text-xs font-normal text-gray-400">
+                (PDF, image, ZIP, link…)
+              </span>
+            </p>
+            {updateCard.isPending && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" />
+            )}
+          </div>
+
+          {/* existing attachments */}
+          {localAttachments.length > 0 && (
+            <div className="mb-3 space-y-1.5">
+              {localAttachments.map((att, idx) => {
                 const Icon = getAttachmentIcon(att.mimeType);
                 return (
-                  <a
-                    key={att.s3Key}
-                    href={att.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 rounded-md bg-gray-50 px-3 py-2 text-sm hover:bg-violet-50"
-                  >
-                    <Icon className="h-4 w-4 text-violet-500" />
-                    <span className="flex-1 truncate">{att.originalName}</span>
-                    <span className="text-xs text-gray-400">{formatFileSize(att.fileSize)}</span>
-                    <Download className="h-4 w-4 text-gray-400" />
-                  </a>
+                  <div key={att.s3Key} className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                    <Icon className="h-4 w-4 shrink-0 text-violet-500" />
+                    {editingIdx === idx ? (
+                      <>
+                        <input
+                          className="flex-1 rounded border border-violet-300 px-2 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-violet-400"
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); handleRenameAttachment(idx); }
+                            if (e.key === "Escape") { setEditingIdx(null); }
+                          }}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRenameAttachment(idx)}
+                          className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 hover:bg-violet-200"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingIdx(null)}
+                          className="rounded px-1 py-0.5 text-xs text-gray-400 hover:text-gray-600"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <a
+                          href={att.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 truncate font-medium text-gray-700 hover:text-violet-600 hover:underline"
+                        >
+                          {att.originalName}
+                        </a>
+                        {att.fileSize > 0 && (
+                          <span className="shrink-0 text-xs text-gray-400">{formatFileSize(att.fileSize)}</span>
+                        )}
+                        <button
+                          type="button"
+                          title="Rename"
+                          onClick={() => { setEditingIdx(idx); setEditingName(att.originalName); }}
+                          className="shrink-0 rounded p-0.5 text-gray-400 hover:text-violet-600"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete"
+                          onClick={() => handleDeleteAttachment(idx)}
+                          className="shrink-0 rounded p-0.5 text-gray-400 hover:text-red-500"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 );
               })}
             </div>
+          )}
+
+          {/* add file */}
+          <label className={`flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500 hover:border-violet-400 hover:text-violet-600 ${attUploading ? "pointer-events-none opacity-60" : ""}`}>
+            {attUploading ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /><span>Uploading…</span></>
+            ) : (
+              <><Paperclip className="h-4 w-4" /><span>Upload file (PDF, image, ZIP…)</span></>
+            )}
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleAttachmentUpload}
+              disabled={attUploading}
+            />
+          </label>
+
+          {/* add link */}
+          <div className="mt-2 flex items-center gap-2">
+            <Link className="h-4 w-4 shrink-0 text-gray-400" />
+            <input
+              type="url"
+              value={attLinkUrl}
+              onChange={(e) => setAttLinkUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddAttachmentLink(); } }}
+              placeholder="https://…  (Facebook, Drive, website…)"
+              className="flex-1 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+            />
+            <input
+              type="text"
+              value={attLinkName}
+              onChange={(e) => setAttLinkName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddAttachmentLink(); } }}
+              placeholder="Name (optional)"
+              className="w-28 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleAddAttachmentLink}
+              className="shrink-0 rounded bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
+            >
+              Add link
+            </button>
           </div>
-        )}
+        </div>
+
+        <CardDiscussion cardId={card.id} />
       </div>
     </div>
   );
@@ -1624,6 +1840,8 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [attachmentSubfolder, setAttachmentSubfolder] = useState("study-cards/attachments");
+  const [attachmentLinkUrl, setAttachmentLinkUrl] = useState("");
+  const [attachmentLinkName, setAttachmentLinkName] = useState("");
 
   const currentTagToken = tags.split(",").at(-1)?.trimStart() ?? "";
   const selectedTags = tags
@@ -1838,6 +2056,27 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
 
   const removeAttachment = (index: number) => {
     setAttachments((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addAttachmentLink = () => {
+    const linkUrl = attachmentLinkUrl.trim();
+    const linkName = attachmentLinkName.trim() || linkUrl;
+    if (!linkUrl) return;
+
+    setAttachments((prev) => [
+      ...prev,
+      {
+        fileName: linkName,
+        originalName: linkName,
+        mimeType: "text/x-url",
+        fileSize: 0,
+        s3Key: `link_${Date.now()}`,
+        url: linkUrl,
+      },
+    ]);
+
+    setAttachmentLinkUrl("");
+    setAttachmentLinkName("");
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -2125,48 +2364,42 @@ function CreateCardForm({ onClose, onSubmit, isSubmitting }: CreateCardFormProps
             </label>
             <div className="mt-2">
               <p className="mb-1 text-xs text-gray-400">File too large? Paste a link instead:</p>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const form = e.currentTarget;
-                  const linkUrl = (form.elements.namedItem("linkUrl") as HTMLInputElement).value.trim();
-                  const linkName = (form.elements.namedItem("linkName") as HTMLInputElement).value.trim() || linkUrl;
-                  if (!linkUrl) return;
-                  setAttachments((prev) => [
-                    ...prev,
-                    {
-                      fileName: linkName,
-                      originalName: linkName,
-                      mimeType: "text/x-url",
-                      fileSize: 0,
-                      s3Key: `link_${Date.now()}`,
-                      url: linkUrl,
-                    },
-                  ]);
-                  form.reset();
-                }}
-                className="flex items-center gap-2"
-              >
+              <div className="flex items-center gap-2">
                 <Link className="h-4 w-4 shrink-0 text-gray-400" />
                 <input
-                  name="linkUrl"
                   type="url"
+                  value={attachmentLinkUrl}
+                  onChange={(e) => setAttachmentLinkUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addAttachmentLink();
+                    }
+                  }}
                   placeholder="https://drive.google.com/..."
                   className="flex-1 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
                 />
                 <input
-                  name="linkName"
                   type="text"
+                  value={attachmentLinkName}
+                  onChange={(e) => setAttachmentLinkName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addAttachmentLink();
+                    }
+                  }}
                   placeholder="Name (optional)"
                   className="w-32 rounded border border-gray-200 px-2 py-1 text-sm focus:border-violet-500 focus:outline-none"
                 />
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={addAttachmentLink}
                   className="rounded bg-violet-100 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-200"
                 >
                   Add
                 </button>
-              </form>
+              </div>
             </div>
           </div>
 

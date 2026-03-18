@@ -218,6 +218,13 @@ export const studyCardsRouter = createTRPCRouter({
     return result.map((r) => r.category).filter(Boolean);
   }),
 
+  deleteAttachmentFile: publicProcedure
+    .input(z.object({ s3Key: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      await deleteS3Object(input.s3Key);
+      return { success: true };
+    }),
+
   getStats: publicProcedure.query(async ({ ctx }) => {
     const totalResult = await ctx.db
       .select({ count: sql<number>`count(*)` })
