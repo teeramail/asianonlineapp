@@ -2,6 +2,7 @@
 
 import { Heart } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { brand } from "~/config/brand";
 import { StudyCards } from "./study-cards";
 import { StatsBar } from "./stats-bar";
 
@@ -24,8 +25,8 @@ export function Dashboard() {
                 <Heart className="h-5 w-5 text-white" fill="white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">VLHoldings</h1>
-                <p className="text-xs text-gray-500">Study Cards for your kid</p>
+                <h1 className="text-xl font-bold text-gray-900">{brand.name}</h1>
+                <p className="text-xs text-gray-500">{brand.tagline}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
