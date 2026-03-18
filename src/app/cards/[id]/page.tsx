@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 
+import { CardDiscussion } from "~/app/_components/card-discussion";
 import { db } from "~/server/db";
 import { studyCards } from "~/server/db/schema";
 
@@ -290,6 +291,8 @@ export default async function CardDetailPage({
                 </div>
               </div>
             )}
+
+            <CardDiscussion cardId={card.id} />
 
             {/* Edit button bottom */}
             <div className="mt-8 border-t border-gray-100 pt-6">
